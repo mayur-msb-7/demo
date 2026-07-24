@@ -1,0 +1,90 @@
+function Get-GitInfo {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $null }
+    $branch = git branch --show-current 2>$null
+    if (-not $branch) { return $null }
+
+    $lines = git status --porcelain --branch 2>$null
+    $dirty = ($lines | Select-Object -Skip 1).Count -gt 0
+    $ahead=0;$behind=0
+    $first = $lines | Select-Object -First 1
+    if($first -match 'ahead (\d+)'){ $ahead=[int]$matches[1]}
+    if($first -match 'behind (\d+)'){ $behind=[int]$matches[1]}
+
+    [pscustomobject]@{
+        Branch=$branch.Trim()
+        Dirty=$dirty
+        Ahead=$ahead
+        Behind=$behind
+    }
+}
+
+function Get-JavaVersion {
+    if(-not (Get-Command java -ErrorAction SilentlyContinue)){ return $null }
+    try{
+        $v=& java -version 2>&1 | Select-Object -First 1
+        if($v -match '"([^"]+)"'){ return $matches[1] }
+    } catch{}
+    return $null
+}
+
+function prompt {
+
+    $ok = $?
+    $time = Get-Date -Format "HH:mm"
+
+    $full = (Get-Location).Path.Replace($HOME,"~")
+    $project = Split-Path $full -Leaf
+    if([string]::IsNullOrWhiteSpace($project)){ $project = $full }
+
+    $parent = Split-Path $full
+    if($parent -eq ""){ $parent = "~" }
+
+    $git = Get-GitInfo
+    $java = Get-JavaVersion
+
+    Write-Host "╭─ " -ForegroundColor DarkGray -NoNewline
+
+    if($ok){
+        Write-Host "✔ " -ForegroundColor Green -NoNewline
+    } else {
+        Write-Host "✘ " -ForegroundColor Red -NoNewline
+    }
+
+    Write-Host $env:USERNAME -ForegroundColor Cyan -NoNewline
+    Write-Host "@" -ForegroundColor DarkGray -NoNewline
+    Write-Host $env:COMPUTERNAME -ForegroundColor Green
+
+    Write-Host "├─ 📦 " -ForegroundColor DarkGray -NoNewline
+    Write-Host $project -ForegroundColor Yellow -NoNewline
+
+    if($git){
+        Write-Host "    🌿 " -ForegroundColor Green -NoNewline
+        Write-Host $git.Branch -ForegroundColor Magenta -NoNewline
+        if($git.Dirty){ Write-Host " ●" -ForegroundColor Yellow -NoNewline }
+        if($git.Ahead -gt 0){ Write-Host " ⇡$($git.Ahead)" -ForegroundColor Cyan -NoNewline }
+        if($git.Behind -gt 0){ Write-Host " ⇣$($git.Behind)" -ForegroundColor Cyan -NoNewline }
+    }
+    Write-Host ""
+
+    Write-Host "│  📁 " -ForegroundColor DarkGray -NoNewline
+    Write-Host $parent -ForegroundColor DarkGray
+
+    Write-Host "├─ " -ForegroundColor DarkGray -NoNewline
+
+    if($java){
+        Write-Host "☕ Java $java" -ForegroundColor Red -NoNewline
+    } else {
+        Write-Host "⚡ PowerShell" -ForegroundColor Blue -NoNewline
+    }
+
+    if($env:VIRTUAL_ENV){
+        Write-Host "    🐍 $(Split-Path $env:VIRTUAL_ENV -Leaf)" -ForegroundColor Green -NoNewline
+    }
+
+    Write-Host "    ⚡ PS $($PSVersionTable.PSVersion.ToString())" -ForegroundColor Blue -NoNewline
+    Write-Host "    🕒 $time" -ForegroundColor DarkGray
+
+    Write-Host "╰─" -ForegroundColor DarkGray -NoNewline
+    Write-Host "❯ " -ForegroundColor Green -NoNewline
+    return " "
+}
