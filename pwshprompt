@@ -1,5 +1,22 @@
-# Prevent Python virtual environments from modifying the prompt
 $env:VIRTUAL_ENV_DISABLE_PROMPT = 1
+
+# Cache expensive runtime lookups
+$script:PromptCache = @{}
+
+function Get-CachedValue {
+    param(
+        [string]$Name,
+        [scriptblock]$Loader
+    )
+
+    if ($script:PromptCache.ContainsKey($Name)) {
+        return $script:PromptCache[$Name]
+    }
+
+    $value = & $Loader
+    $script:PromptCache[$Name] = $value
+    return $value
+}
 
 function Get-GitInfo {
 
@@ -7,30 +24,38 @@ function Get-GitInfo {
         return $null
     }
 
-    $branch = git branch --show-current 2>$null
+    $lines = git status --porcelain --branch 2>$null
+
+    if (-not $lines) {
+        return $null
+    }
+
+    $header = $lines[0]
+
+    $branch = $null
+
+    if ($header -match '^## (.+?)(?:\.\.\.|$)') {
+        $branch = $matches[1].Trim()
+    }
+
     if (-not $branch) {
         return $null
     }
 
-    $lines = git status --porcelain --branch 2>$null
-    $dirty = ($lines | Select-Object -Skip 1).Count -gt 0
-
     $ahead = 0
     $behind = 0
 
-    $first = $lines | Select-Object -First 1
-
-    if ($first -match 'ahead (\d+)') {
+    if ($header -match 'ahead (\d+)') {
         $ahead = [int]$matches[1]
     }
 
-    if ($first -match 'behind (\d+)') {
+    if ($header -match 'behind (\d+)') {
         $behind = [int]$matches[1]
     }
 
     [PSCustomObject]@{
-        Branch = $branch.Trim()
-        Dirty  = $dirty
+        Branch = $branch
+        Dirty  = ($lines.Count -gt 1)
         Ahead  = $ahead
         Behind = $behind
     }
@@ -38,56 +63,67 @@ function Get-GitInfo {
 
 function Get-JavaVersion {
 
-    if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
-        return $null
-    }
+    Get-CachedValue "JavaVersion" {
 
-    try {
-
-        $version = & java -version 2>&1 | Select-Object -First 1
-
-        if ($version -match '"(\d+)') {
-            return $matches[1]
+        if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
+            return $null
         }
 
-    } catch {}
+        try {
 
-    return $null
+            $version = & java -version 2>&1 | Select-Object -First 1
+
+            if ($version -match '"(\d+)') {
+                return $matches[1]
+            }
+
+        }
+        catch {}
+
+        return $null
+    }
 }
 
 function Get-PythonVersion {
 
-    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        return $null
-    }
+    Get-CachedValue "PythonVersion" {
 
-    try {
-
-        $version = & python --version 2>$null
-
-        if ($version -match 'Python (\d+\.\d+)') {
-            return $matches[1]
+        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+            return $null
         }
 
-    } catch {}
+        try {
 
-    return $null
+            $version = & python --version 2>$null
+
+            if ($version -match 'Python (\d+\.\d+)') {
+                return $matches[1]
+            }
+
+        }
+        catch {}
+
+        return $null
+    }
 }
 
 function Get-NodeVersion {
 
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Get-CachedValue "NodeVersion" {
+
+        if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            return $null
+        }
+
+        try {
+
+            return ((& node --version).Trim()).TrimStart("v")
+
+        }
+        catch {}
+
         return $null
     }
-
-    try {
-
-        $version = (& node --version).Trim()
-        return $version.TrimStart("v")
-
-    } catch {}
-
-    return $null
 }
 
 function prompt {
@@ -98,19 +134,27 @@ function prompt {
     $full = (Get-Location).Path.Replace($HOME, "~")
 
     $project = Split-Path $full -Leaf
+
     if ([string]::IsNullOrWhiteSpace($project)) {
         $project = $full
     }
 
     $parent = Split-Path $full
-    if ($parent -eq "") {
+
+    if ([string]::IsNullOrWhiteSpace($parent)) {
         $parent = "~"
     }
 
     $git = Get-GitInfo
+
+    # Cached runtime versions
     $java = Get-JavaVersion
     $python = Get-PythonVersion
     $node = Get-NodeVersion
+
+    # ----------------------------------------------------------------------
+    # Header
+    # ----------------------------------------------------------------------
 
     Write-Host "╭─ " -ForegroundColor DarkGray -NoNewline
 
@@ -148,8 +192,16 @@ function prompt {
 
     Write-Host ""
 
+    # ----------------------------------------------------------------------
+    # Current Path
+    # ----------------------------------------------------------------------
+
     Write-Host "│  📁 " -ForegroundColor DarkGray -NoNewline
     Write-Host $parent -ForegroundColor DarkGray
+
+    # ----------------------------------------------------------------------
+    # Runtime Versions
+    # ----------------------------------------------------------------------
 
     Write-Host "├─ " -ForegroundColor DarkGray -NoNewline
 
@@ -167,11 +219,18 @@ function prompt {
         }
 
         if ($env:VIRTUAL_ENV) {
+
             $venv = Split-Path $env:VIRTUAL_ENV -Leaf
-            Write-Host "🐍 Python $python ($venv)" -ForegroundColor Green -NoNewline
+
+            Write-Host "🐍 Python $python ($venv)" `
+                -ForegroundColor Green `
+                -NoNewline
         }
         else {
-            Write-Host "🐍 Python $python" -ForegroundColor Green -NoNewline
+
+            Write-Host "🐍 Python $python" `
+                -ForegroundColor Green `
+                -NoNewline
         }
 
         $printed = $true
@@ -183,7 +242,10 @@ function prompt {
             Write-Host "    " -NoNewline
         }
 
-        Write-Host "🟢 Node $node" -ForegroundColor Green -NoNewline
+        Write-Host "🟢 Node $node" `
+            -ForegroundColor Green `
+            -NoNewline
+
         $printed = $true
     }
 
@@ -191,8 +253,16 @@ function prompt {
         Write-Host "    " -NoNewline
     }
 
-    Write-Host "⚡ PS $($PSVersionTable.PSVersion)" -ForegroundColor Blue -NoNewline
-    Write-Host "    🕒 $time" -ForegroundColor DarkGray
+    Write-Host "⚡ PS $($PSVersionTable.PSVersion)" `
+        -ForegroundColor Blue `
+        -NoNewline
+
+    Write-Host "    🕒 $time" `
+        -ForegroundColor DarkGray
+
+    # ----------------------------------------------------------------------
+    # Prompt
+    # ----------------------------------------------------------------------
 
     Write-Host "╰─" -ForegroundColor DarkGray -NoNewline
     Write-Host "❯ " -ForegroundColor Green -NoNewline
