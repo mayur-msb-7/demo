@@ -1,29 +1,92 @@
+# Prevent Python virtual environments from modifying the prompt
+$env:VIRTUAL_ENV_DISABLE_PROMPT = 1
+
 function Get-GitInfo {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $null }
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
     $branch = git branch --show-current 2>$null
-    if (-not $branch) { return $null }
+    if (-not $branch) {
+        return $null
+    }
 
     $lines = git status --porcelain --branch 2>$null
     $dirty = ($lines | Select-Object -Skip 1).Count -gt 0
-    $ahead=0;$behind=0
-    $first = $lines | Select-Object -First 1
-    if($first -match 'ahead (\d+)'){ $ahead=[int]$matches[1]}
-    if($first -match 'behind (\d+)'){ $behind=[int]$matches[1]}
 
-    [pscustomobject]@{
-        Branch=$branch.Trim()
-        Dirty=$dirty
-        Ahead=$ahead
-        Behind=$behind
+    $ahead = 0
+    $behind = 0
+
+    $first = $lines | Select-Object -First 1
+
+    if ($first -match 'ahead (\d+)') {
+        $ahead = [int]$matches[1]
+    }
+
+    if ($first -match 'behind (\d+)') {
+        $behind = [int]$matches[1]
+    }
+
+    [PSCustomObject]@{
+        Branch = $branch.Trim()
+        Dirty  = $dirty
+        Ahead  = $ahead
+        Behind = $behind
     }
 }
 
 function Get-JavaVersion {
-    if(-not (Get-Command java -ErrorAction SilentlyContinue)){ return $null }
-    try{
-        $v=& java -version 2>&1 | Select-Object -First 1
-        if($v -match '"([^"]+)"'){ return $matches[1] }
-    } catch{}
+
+    if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    try {
+
+        $version = & java -version 2>&1 | Select-Object -First 1
+
+        if ($version -match '"(\d+)') {
+            return $matches[1]
+        }
+
+    } catch {}
+
+    return $null
+}
+
+function Get-PythonVersion {
+
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    try {
+
+        $version = & python --version 2>$null
+
+        if ($version -match 'Python (\d+\.\d+)') {
+            return $matches[1]
+        }
+
+    } catch {}
+
+    return $null
+}
+
+function Get-NodeVersion {
+
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    try {
+
+        $version = (& node --version).Trim()
+        return $version.TrimStart("v")
+
+    } catch {}
+
     return $null
 }
 
@@ -32,21 +95,29 @@ function prompt {
     $ok = $?
     $time = Get-Date -Format "HH:mm"
 
-    $full = (Get-Location).Path.Replace($HOME,"~")
+    $full = (Get-Location).Path.Replace($HOME, "~")
+
     $project = Split-Path $full -Leaf
-    if([string]::IsNullOrWhiteSpace($project)){ $project = $full }
+    if ([string]::IsNullOrWhiteSpace($project)) {
+        $project = $full
+    }
 
     $parent = Split-Path $full
-    if($parent -eq ""){ $parent = "~" }
+    if ($parent -eq "") {
+        $parent = "~"
+    }
 
     $git = Get-GitInfo
     $java = Get-JavaVersion
+    $python = Get-PythonVersion
+    $node = Get-NodeVersion
 
     Write-Host "╭─ " -ForegroundColor DarkGray -NoNewline
 
-    if($ok){
+    if ($ok) {
         Write-Host "✔ " -ForegroundColor Green -NoNewline
-    } else {
+    }
+    else {
         Write-Host "✘ " -ForegroundColor Red -NoNewline
     }
 
@@ -57,13 +128,24 @@ function prompt {
     Write-Host "├─ 📦 " -ForegroundColor DarkGray -NoNewline
     Write-Host $project -ForegroundColor Yellow -NoNewline
 
-    if($git){
+    if ($git) {
+
         Write-Host "    🌿 " -ForegroundColor Green -NoNewline
         Write-Host $git.Branch -ForegroundColor Magenta -NoNewline
-        if($git.Dirty){ Write-Host " ●" -ForegroundColor Yellow -NoNewline }
-        if($git.Ahead -gt 0){ Write-Host " ⇡$($git.Ahead)" -ForegroundColor Cyan -NoNewline }
-        if($git.Behind -gt 0){ Write-Host " ⇣$($git.Behind)" -ForegroundColor Cyan -NoNewline }
+
+        if ($git.Dirty) {
+            Write-Host " ●" -ForegroundColor Yellow -NoNewline
+        }
+
+        if ($git.Ahead -gt 0) {
+            Write-Host " ⇡$($git.Ahead)" -ForegroundColor Cyan -NoNewline
+        }
+
+        if ($git.Behind -gt 0) {
+            Write-Host " ⇣$($git.Behind)" -ForegroundColor Cyan -NoNewline
+        }
     }
+
     Write-Host ""
 
     Write-Host "│  📁 " -ForegroundColor DarkGray -NoNewline
@@ -71,20 +153,49 @@ function prompt {
 
     Write-Host "├─ " -ForegroundColor DarkGray -NoNewline
 
-    if($java){
-        Write-Host "☕ Java $java" -ForegroundColor Red -NoNewline
-    } else {
-        Write-Host "⚡ PowerShell" -ForegroundColor Blue -NoNewline
+    $printed = $false
+
+    if ($java) {
+        Write-Host "♨️ Java $java" -ForegroundColor Red -NoNewline
+        $printed = $true
     }
 
-    if($env:VIRTUAL_ENV){
-        Write-Host "    🐍 $(Split-Path $env:VIRTUAL_ENV -Leaf)" -ForegroundColor Green -NoNewline
+    if ($python) {
+
+        if ($printed) {
+            Write-Host "    " -NoNewline
+        }
+
+        if ($env:VIRTUAL_ENV) {
+            $venv = Split-Path $env:VIRTUAL_ENV -Leaf
+            Write-Host "🐍 Python $python ($venv)" -ForegroundColor Green -NoNewline
+        }
+        else {
+            Write-Host "🐍 Python $python" -ForegroundColor Green -NoNewline
+        }
+
+        $printed = $true
     }
 
-    Write-Host "    ⚡ PS $($PSVersionTable.PSVersion.ToString())" -ForegroundColor Blue -NoNewline
+    if ($node) {
+
+        if ($printed) {
+            Write-Host "    " -NoNewline
+        }
+
+        Write-Host "🟢 Node $node" -ForegroundColor Green -NoNewline
+        $printed = $true
+    }
+
+    if ($printed) {
+        Write-Host "    " -NoNewline
+    }
+
+    Write-Host "⚡ PS $($PSVersionTable.PSVersion)" -ForegroundColor Blue -NoNewline
     Write-Host "    🕒 $time" -ForegroundColor DarkGray
 
     Write-Host "╰─" -ForegroundColor DarkGray -NoNewline
     Write-Host "❯ " -ForegroundColor Green -NoNewline
+
     return " "
 }
